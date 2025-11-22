@@ -1,9 +1,9 @@
 {
-	"id": "pinned-items-plugin",
-	"name": "Pinned Items",
-	"version": "1.0.0",
+	"id": "file-explorer-enhancements",
+	"name": "File Explorer Enhancements",
+	"version": "1.1.0",
 	"minAppVersion": "0.15.0",
-	"description": "Pin files and folders to the top of your file explorer for quick access.",
+	"description": "Enhanced file explorer with pinned items, folder notes, and file count display.",
 	"author": "Obsidian",
 	"authorUrl": "https://obsidian.md",
 	"fundingUrl": "https://obsidian.md/pricing",

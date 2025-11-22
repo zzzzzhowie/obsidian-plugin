@@ -1,46 +1,34 @@
 import {
 	App,
 	Notice,
-	Plugin,
-	PluginSettingTab,
-	Setting,
 	TFile,
 	TFolder,
 	TAbstractFile,
-	Menu,
 } from "obsidian";
+import { PinnedItem, MyPluginSettings } from "./settings";
+import type MyPlugin from "./main";
 
-interface PinnedItem {
-	path: string;
-	type: "file" | "folder";
-	name: string;
-}
-
-interface MyPluginSettings {
-	pinnedItems: PinnedItem[];
-}
-
-const DEFAULT_SETTINGS: MyPluginSettings = {
-	pinnedItems: [],
-};
-
-export default class MyPlugin extends Plugin {
-	settings: MyPluginSettings;
+export class PinnedItemsManager {
+	app: App;
+	plugin: MyPlugin;
 	pinnedContainerEl: HTMLElement | null = null;
 	private initializationAttempts = 0;
 	private readonly MAX_INIT_ATTEMPTS = 10;
 	private mutationObserver: MutationObserver | null = null;
 
-	async onload() {
-		await this.loadSettings();
+	constructor(app: App, plugin: MyPlugin) {
+		this.app = app;
+		this.plugin = plugin;
+	}
 
+	initialize() {
 		// Initialize pinned items with retry logic for mobile
 		this.app.workspace.onLayoutReady(() => {
 			this.initializeWithRetry();
 		});
 
 		// Watch for layout changes (important for mobile when sidebars open/close)
-		this.registerEvent(
+		this.plugin.registerEvent(
 			this.app.workspace.on("layout-change", () => {
 				// Small delay to let the layout settle
 				setTimeout(() => {
@@ -50,14 +38,13 @@ export default class MyPlugin extends Plugin {
 					) {
 						this.pinnedContainerEl = null;
 						this.initializeWithRetry();
-						this.setupFileExplorerObserver();
 					}
 				}, 150);
 			})
 		);
 
 		// Watch for workspace changes that might affect the file explorer
-		this.registerEvent(
+		this.plugin.registerEvent(
 			this.app.workspace.on("active-leaf-change", () => {
 				// Small delay to let the leaf change complete
 				setTimeout(() => {
@@ -66,24 +53,10 @@ export default class MyPlugin extends Plugin {
 						!this.pinnedContainerEl.isConnected
 					) {
 						this.initializeWithRetry();
-						this.setupFileExplorerObserver();
 					}
 				}, 150);
 			})
 		);
-
-		// Register context menu event for files and folders
-		this.registerEvent(
-			this.app.workspace.on(
-				"file-menu",
-				(menu: Menu, file: TAbstractFile) => {
-					this.addPinMenuItems(menu, file);
-				}
-			)
-		);
-
-		// Add settings tab
-		this.addSettingTab(new PinnedItemsSettingTab(this.app, this));
 	}
 
 	private initializeWithRetry() {
@@ -101,12 +74,10 @@ export default class MyPlugin extends Plugin {
 			}, delay);
 		} else if (success) {
 			this.initializationAttempts = 0;
-			// Set up observer to watch for file explorer changes
-			this.setupFileExplorerObserver();
 		}
 	}
 
-	onunload() {
+	cleanup() {
 		// Clean up the mutation observer
 		if (this.mutationObserver) {
 			this.mutationObserver.disconnect();
@@ -120,104 +91,6 @@ export default class MyPlugin extends Plugin {
 		}
 	}
 
-	private setupFileExplorerObserver() {
-		// Disconnect existing observer
-		if (this.mutationObserver) {
-			this.mutationObserver.disconnect();
-			this.mutationObserver = null;
-		}
-
-		// On iOS, the mutation observer causes flickering
-		// Instead, we'll rely on workspace events only
-	}
-
-	private setupObserverForContainer_DISABLED(containerEl: HTMLElement) {
-		let debounceTimer: NodeJS.Timeout | null = null;
-
-		// Watch for changes to the file explorer container
-		this.mutationObserver = new MutationObserver((mutations) => {
-			// Check if pinned container was removed
-			let needsReinit = false;
-
-			for (const mutation of mutations) {
-				for (const removedNode of Array.from(mutation.removedNodes)) {
-					if (
-						removedNode === this.pinnedContainerEl ||
-						(removedNode instanceof HTMLElement &&
-							removedNode.contains(this.pinnedContainerEl))
-					) {
-						needsReinit = true;
-						break;
-					}
-				}
-				if (needsReinit) break;
-			}
-
-			// Also check if container is disconnected
-			if (
-				!needsReinit &&
-				(!this.pinnedContainerEl || !this.pinnedContainerEl.isConnected)
-			) {
-				needsReinit = true;
-			}
-
-			if (needsReinit) {
-				// Debounce to avoid excessive re-initialization
-				if (debounceTimer) {
-					clearTimeout(debounceTimer);
-				}
-
-				debounceTimer = setTimeout(() => {
-					// Check if the nav-files-container is now present (means file explorer refreshed)
-					const navFilesContainer = containerEl.querySelector(
-						".nav-files-container"
-					) as HTMLElement;
-
-					if (navFilesContainer) {
-						// Ensure the file list is visible
-						navFilesContainer.style.display = "";
-						navFilesContainer.style.visibility = "";
-
-						// Re-initialize
-						this.pinnedContainerEl = null;
-						this.addPinnedItemsToFileExplorer();
-					}
-				}, 300);
-			}
-		});
-
-		// Observe only direct children changes, not deep subtree
-		this.mutationObserver.observe(containerEl, {
-			childList: true,
-			subtree: false, // Changed to false to reduce noise
-		});
-
-	}
-
-	addPinMenuItems(menu: Menu, file: TAbstractFile) {
-		const isPinned = this.settings.pinnedItems.some(
-			(item) => item.path === file.path
-		);
-
-		if (!isPinned) {
-			menu.addItem((item) => {
-				item.setTitle("📌 Pin to top")
-					.setIcon("pin")
-					.onClick(async () => {
-						await this.pinItem(file);
-					});
-			});
-		} else {
-			menu.addItem((item) => {
-				item.setTitle("📌 Unpin")
-					.setIcon("pin-off")
-					.onClick(async () => {
-						await this.unpinItem(file.path);
-					});
-			});
-		}
-	}
-
 	async pinItem(file: TAbstractFile) {
 		const item: PinnedItem = {
 			path: file.path,
@@ -226,20 +99,23 @@ export default class MyPlugin extends Plugin {
 		};
 
 		// Check if already pinned
-		if (!this.settings.pinnedItems.some((p) => p.path === file.path)) {
-			this.settings.pinnedItems.push(item);
-			await this.saveSettings();
+		if (
+			!this.plugin.settings.pinnedItems.some((p) => p.path === file.path)
+		) {
+			this.plugin.settings.pinnedItems.push(item);
+			await this.plugin.saveSettings();
 			this.refreshPinnedItems();
 			new Notice(`Pinned: ${file.name}`);
 		}
 	}
 
 	async unpinItem(path: string) {
-		const item = this.settings.pinnedItems.find((p) => p.path === path);
-		this.settings.pinnedItems = this.settings.pinnedItems.filter(
-			(item) => item.path !== path
+		const item = this.plugin.settings.pinnedItems.find(
+			(p) => p.path === path
 		);
-		await this.saveSettings();
+		this.plugin.settings.pinnedItems =
+			this.plugin.settings.pinnedItems.filter((item) => item.path !== path);
+		await this.plugin.saveSettings();
 		this.refreshPinnedItems();
 		if (item) {
 			new Notice(`Unpinned: ${item.name}`);
@@ -360,22 +236,22 @@ export default class MyPlugin extends Plugin {
 			// Clear existing items
 			this.pinnedContainerEl.empty();
 
-			if (this.settings.pinnedItems.length === 0) {
-			// Completely remove the container when empty
-			this.pinnedContainerEl.remove();
-			this.pinnedContainerEl = null;
-			return;
+			if (this.plugin.settings.pinnedItems.length === 0) {
+				// Completely remove the container when empty
+				this.pinnedContainerEl.remove();
+				this.pinnedContainerEl = null;
+				return;
 			}
 
 			this.pinnedContainerEl.style.display = "block";
 			this.pinnedContainerEl.style.visibility = "visible";
 			this.pinnedContainerEl.style.opacity = "1";
 
-		// Add each pinned item
-		this.settings.pinnedItems.forEach((item) => {
-			if (!this.pinnedContainerEl) return;
+			// Add each pinned item
+			this.plugin.settings.pinnedItems.forEach((item) => {
+				if (!this.pinnedContainerEl) return;
 
-			const itemEl = this.pinnedContainerEl.createDiv({
+				const itemEl = this.pinnedContainerEl.createDiv({
 					cls: "pinned-item",
 				});
 
@@ -395,9 +271,7 @@ export default class MyPlugin extends Plugin {
 				// Handle both touch and click events for better mobile support
 				const openFile = (evt: Event) => {
 					evt.preventDefault();
-					const file = this.app.vault.getAbstractFileByPath(
-						item.path
-					);
+					const file = this.app.vault.getAbstractFileByPath(item.path);
 					if (file) {
 						if (file instanceof TFile) {
 							// Open the file in the active leaf or create a new one
@@ -415,9 +289,9 @@ export default class MyPlugin extends Plugin {
 				};
 
 				// Use touchstart for iOS to avoid double-tap requirement
-				this.registerDomEvent(itemEl, "touchstart", openFile);
+				this.plugin.registerDomEvent(itemEl, "touchstart", openFile);
 				// Keep click for desktop and fallback
-				this.registerDomEvent(itemEl, "click", openFile);
+				this.plugin.registerDomEvent(itemEl, "click", openFile);
 
 				// Add unpin button
 				const unpinBtn = itemEl.createSpan({
@@ -433,97 +307,13 @@ export default class MyPlugin extends Plugin {
 				};
 
 				// Use touchstart for iOS immediate response
-			this.registerDomEvent(unpinBtn, "touchstart", handleUnpin);
-			// Keep click for desktop
-			this.registerDomEvent(unpinBtn, "click", handleUnpin);
-		});
-	} catch (error) {
+				this.plugin.registerDomEvent(unpinBtn, "touchstart", handleUnpin);
+				// Keep click for desktop
+				this.plugin.registerDomEvent(unpinBtn, "click", handleUnpin);
+			});
+		} catch (error) {
 			console.error("Failed to refresh pinned items:", error);
 		}
 	}
-
-	async loadSettings() {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			await this.loadData()
-		);
-	}
-
-	async saveSettings() {
-		await this.saveData(this.settings);
-	}
 }
 
-class PinnedItemsSettingTab extends PluginSettingTab {
-	plugin: MyPlugin;
-
-	constructor(app: App, plugin: MyPlugin) {
-		super(app, plugin);
-		this.plugin = plugin;
-	}
-
-	display(): void {
-		const { containerEl } = this;
-
-		containerEl.empty();
-
-		containerEl.createEl("h2", { text: "Pinned Items Settings" });
-
-		new Setting(containerEl)
-			.setName("Pinned items")
-			.setDesc(
-				"Right-click on any file or folder in the file explorer to pin it to the top."
-			);
-
-		// Display current pinned items
-		if (this.plugin.settings.pinnedItems.length > 0) {
-			containerEl.createEl("h3", { text: "Currently pinned items:" });
-
-			const listEl = containerEl.createEl("ul", {
-				cls: "pinned-items-list",
-			});
-
-			this.plugin.settings.pinnedItems.forEach((item) => {
-				const itemEl = listEl.createEl("li");
-				itemEl.createSpan({
-					text: `${item.type === "folder" ? "📁" : "📄"} ${
-						item.path
-					}`,
-					cls: "pinned-item-path",
-				});
-
-				const removeBtn = itemEl.createEl("button", {
-					text: "Remove",
-					cls: "pinned-item-remove-btn",
-				});
-
-				removeBtn.addEventListener("click", async () => {
-					await this.plugin.unpinItem(item.path);
-					this.display(); // Refresh the settings display
-				});
-			});
-		} else {
-			containerEl.createEl("p", {
-				text: "No items pinned yet. Right-click on any file or folder to pin it.",
-				cls: "setting-item-description",
-			});
-		}
-
-		new Setting(containerEl)
-			.setName("Clear all pinned items")
-			.setDesc("Remove all pinned items at once")
-			.addButton((button) =>
-				button
-					.setButtonText("Clear all")
-					.setWarning()
-					.onClick(async () => {
-						this.plugin.settings.pinnedItems = [];
-						await this.plugin.saveSettings();
-						this.plugin.refreshPinnedItems();
-						this.display();
-						new Notice("All pinned items cleared");
-					})
-			);
-	}
-}
