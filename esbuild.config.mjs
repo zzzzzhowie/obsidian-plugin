@@ -1,6 +1,8 @@
 import esbuild from "esbuild";
 import process from "process";
 import builtins from "builtin-modules";
+import fs from "fs";
+import path from "path";
 
 const banner =
 `/*
@@ -37,12 +39,27 @@ const context = await esbuild.context({
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
-	outfile: "main.js",
+	outfile: "dist/main.js",
 	minify: prod,
 });
 
 if (prod) {
 	await context.rebuild();
+	
+	// Copy manifest.json and styles.css to dist folder
+	const distDir = "dist";
+	if (!fs.existsSync(distDir)) {
+		fs.mkdirSync(distDir, { recursive: true });
+	}
+	
+	const filesToCopy = ["manifest.json", "styles.css"];
+	for (const file of filesToCopy) {
+		if (fs.existsSync(file)) {
+			fs.copyFileSync(file, path.join(distDir, file));
+			console.log(`Copied ${file} to ${distDir}/`);
+		}
+	}
+	
 	process.exit(0);
 } else {
 	await context.watch();

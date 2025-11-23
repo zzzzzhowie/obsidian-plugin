@@ -96,6 +96,7 @@ export class PinnedItemsManager {
 			path: file.path,
 			type: file instanceof TFolder ? "folder" : "file",
 			name: file.name,
+			order: this.getNextOrder(),
 		};
 
 		// Check if already pinned
@@ -107,6 +108,41 @@ export class PinnedItemsManager {
 			this.refreshPinnedItems();
 			new Notice(`Pinned: ${file.name}`);
 		}
+	}
+
+	private getNextOrder(): number {
+		if (this.plugin.settings.pinnedItems.length === 0) {
+			return 0;
+		}
+		const maxOrder = Math.max(
+			...this.plugin.settings.pinnedItems.map((item) => item.order ?? 0)
+		);
+		return maxOrder + 1;
+	}
+
+	async updateItemOrder(path: string, newOrder: number) {
+		const item = this.plugin.settings.pinnedItems.find(
+			(p) => p.path === path
+		);
+		if (item) {
+			item.order = newOrder;
+			await this.plugin.saveSettings();
+			this.refreshPinnedItems();
+		}
+	}
+
+	async reorderItems(newOrder: { path: string; order: number }[]) {
+		// Update all items with new order
+		newOrder.forEach(({ path, order }) => {
+			const item = this.plugin.settings.pinnedItems.find(
+				(p) => p.path === path
+			);
+			if (item) {
+				item.order = order;
+			}
+		});
+		await this.plugin.saveSettings();
+		this.refreshPinnedItems();
 	}
 
 	async unpinItem(path: string) {
@@ -247,8 +283,20 @@ export class PinnedItemsManager {
 			this.pinnedContainerEl.style.visibility = "visible";
 			this.pinnedContainerEl.style.opacity = "1";
 
+			// Sort pinned items by order, then by name as fallback
+			const sortedItems = [...this.plugin.settings.pinnedItems].sort(
+				(a, b) => {
+					const orderA = a.order ?? 0;
+					const orderB = b.order ?? 0;
+					if (orderA !== orderB) {
+						return orderA - orderB;
+					}
+					return a.name.localeCompare(b.name);
+				}
+			);
+
 			// Add each pinned item
-			this.plugin.settings.pinnedItems.forEach((item) => {
+			sortedItems.forEach((item) => {
 				if (!this.pinnedContainerEl) return;
 
 				const itemEl = this.pinnedContainerEl.createDiv({

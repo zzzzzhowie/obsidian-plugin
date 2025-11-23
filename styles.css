@@ -147,6 +147,36 @@ available in the app when your plugin is enabled.
 	margin: 4px 0;
 	background-color: var(--background-secondary);
 	border-radius: 4px;
+	transition: background-color 0.15s ease, transform 0.1s ease;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.pinned-items-list li:hover {
+	background-color: var(--background-modifier-hover);
+}
+
+.pinned-items-list li.dragging {
+	opacity: 0.5;
+}
+
+.pinned-items-list li.drag-over {
+	background-color: var(--background-modifier-active-hover);
+	border-top: 2px solid var(--interactive-accent);
+}
+
+.pinned-item-drag-handle {
+	margin-right: 8px;
+	color: var(--text-muted);
+	cursor: grab;
+	font-size: 14px;
+	line-height: 1;
+	user-select: none;
+	-webkit-user-select: none;
+}
+
+.pinned-item-drag-handle:active {
+	cursor: grabbing;
 }
 
 .pinned-item-path {

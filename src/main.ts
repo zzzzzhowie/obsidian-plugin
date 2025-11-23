@@ -17,6 +17,7 @@ export default class MyPlugin extends Plugin {
 	pinnedItemsManager: PinnedItemsManager;
 	folderNoteManager: FolderNoteManager;
 	fileCountManager: FileCountManager;
+	private lastSettingsHash: string = "";
 
 	async onload() {
 		await this.loadSettings();
@@ -39,6 +40,41 @@ export default class MyPlugin extends Plugin {
 					this.addContextMenuItems(menu, file);
 				}
 			)
+		);
+
+		// Initialize settings hash
+		this.lastSettingsHash = JSON.stringify(this.settings);
+
+		// Listen for vault changes to detect sync updates
+		// When settings are synced from another device via Obsidian Sync, reload them
+		// Obsidian Sync automatically syncs .obsidian/plugins/<plugin-id>/data.json
+		const pluginDataPath = `.obsidian/plugins/${this.manifest.id}/data.json`;
+
+		const checkSettingsSync = async () => {
+			try {
+				const currentSettings = await this.loadData();
+				const currentHash = JSON.stringify(currentSettings);
+				if (currentHash !== this.lastSettingsHash) {
+					// Settings changed (likely from sync)
+					await this.loadSettings();
+					this.lastSettingsHash = JSON.stringify(this.settings);
+					this.pinnedItemsManager.refreshPinnedItems();
+				}
+			} catch (error) {
+				// Ignore errors during sync check
+			}
+		};
+
+		// Check for sync updates periodically (every 2 seconds)
+		this.registerInterval(window.setInterval(checkSettingsSync, 2000));
+
+		// Also listen for file modifications as a backup
+		this.registerEvent(
+			this.app.vault.on("modify", async (file) => {
+				if (file.path === pluginDataPath) {
+					await checkSettingsSync();
+				}
+			})
 		);
 
 		// Add settings tab
@@ -85,10 +121,25 @@ export default class MyPlugin extends Plugin {
 			DEFAULT_SETTINGS,
 			await this.loadData()
 		);
+		
+		// Migrate old pinned items without order field
+		let needsSave = false;
+		this.settings.pinnedItems.forEach((item, index) => {
+			if (item.order === undefined) {
+				item.order = index;
+				needsSave = true;
+			}
+		});
+		
+		if (needsSave) {
+			await this.saveSettings();
+		}
 	}
 
 	async saveSettings() {
 		await this.saveData(this.settings);
+		// Update hash after saving
+		this.lastSettingsHash = JSON.stringify(this.settings);
 	}
 }
 
@@ -150,13 +201,39 @@ class MyPluginSettingTab extends PluginSettingTab {
 		// Display current pinned items
 		if (this.plugin.settings.pinnedItems.length > 0) {
 			containerEl.createEl("h4", { text: "Currently pinned:" });
+			containerEl.createEl("p", {
+				text: "Drag items to reorder them. Changes sync automatically across devices.",
+				cls: "setting-item-description",
+			});
 
 			const listEl = containerEl.createEl("ul", {
 				cls: "pinned-items-list",
 			});
 
-			this.plugin.settings.pinnedItems.forEach((item) => {
+			// Sort items by order for display
+			const sortedItems = [...this.plugin.settings.pinnedItems].sort(
+				(a, b) => {
+					const orderA = a.order ?? 0;
+					const orderB = b.order ?? 0;
+					if (orderA !== orderB) {
+						return orderA - orderB;
+					}
+					return a.name.localeCompare(b.name);
+				}
+			);
+
+			sortedItems.forEach((item, index) => {
 				const itemEl = listEl.createEl("li");
+				itemEl.setAttr("draggable", "true");
+				itemEl.dataset.path = item.path;
+				itemEl.style.cursor = "move";
+
+				// Drag handle icon
+				itemEl.createSpan({
+					text: "⋮⋮",
+					cls: "pinned-item-drag-handle",
+				});
+
 				itemEl.createSpan({
 					text: `${item.type === "folder" ? "📁" : "📄"} ${
 						item.path
@@ -171,6 +248,77 @@ class MyPluginSettingTab extends PluginSettingTab {
 
 				removeBtn.addEventListener("click", async () => {
 					await this.plugin.pinnedItemsManager.unpinItem(item.path);
+					this.display(); // Refresh the settings display
+				});
+
+				// Drag and drop handlers
+				itemEl.addEventListener("dragstart", (e) => {
+					if (e.dataTransfer) {
+						e.dataTransfer.effectAllowed = "move";
+						e.dataTransfer.setData("text/plain", item.path);
+					}
+					itemEl.classList.add("dragging");
+					setTimeout(() => {
+						itemEl.style.display = "none";
+					}, 0);
+				});
+
+				itemEl.addEventListener("dragend", (e) => {
+					itemEl.classList.remove("dragging");
+					itemEl.style.display = "";
+					// Remove drag-over class from all items
+					listEl.querySelectorAll(".drag-over").forEach((el) => {
+						el.classList.remove("drag-over");
+					});
+				});
+
+				itemEl.addEventListener("dragover", (e) => {
+					e.preventDefault();
+					if (e.dataTransfer) {
+						e.dataTransfer.dropEffect = "move";
+					}
+					const dragging = listEl.querySelector(".dragging") as HTMLElement;
+					if (!dragging) return;
+
+					const afterElement = this.getDragAfterElement(
+						listEl,
+						e.clientY
+					);
+					if (afterElement == null) {
+						listEl.appendChild(dragging);
+					} else {
+						listEl.insertBefore(dragging, afterElement);
+					}
+				});
+
+				itemEl.addEventListener("dragenter", (e) => {
+					e.preventDefault();
+					if (!itemEl.classList.contains("dragging")) {
+						itemEl.classList.add("drag-over");
+					}
+				});
+
+				itemEl.addEventListener("dragleave", () => {
+					itemEl.classList.remove("drag-over");
+				});
+
+				itemEl.addEventListener("drop", async (e) => {
+					e.preventDefault();
+					itemEl.classList.remove("drag-over");
+					const draggedPath = e.dataTransfer?.getData("text/plain");
+					if (!draggedPath || draggedPath === item.path) return;
+
+					// Reorder items based on current DOM order
+					const newOrder: { path: string; order: number }[] = [];
+					const children = Array.from(listEl.children) as HTMLElement[];
+					children.forEach((child, idx) => {
+						const path = child.dataset.path;
+						if (path) {
+							newOrder.push({ path, order: idx });
+						}
+					});
+
+					await this.plugin.pinnedItemsManager.reorderItems(newOrder);
 					this.display(); // Refresh the settings display
 				});
 			});
@@ -195,6 +343,29 @@ class MyPluginSettingTab extends PluginSettingTab {
 				cls: "setting-item-description",
 			});
 		}
+	}
+
+	private getDragAfterElement(
+		container: HTMLElement,
+		y: number
+	): HTMLElement | null {
+		const draggableElements = Array.from(
+			container.querySelectorAll("li:not(.dragging)")
+		) as HTMLElement[];
+
+		return draggableElements.reduce(
+			(closest, child) => {
+				const box = child.getBoundingClientRect();
+				const offset = y - box.top - box.height / 2;
+
+				if (offset < 0 && offset > closest.offset) {
+					return { offset: offset, element: child };
+				} else {
+					return closest;
+				}
+			},
+			{ offset: Number.NEGATIVE_INFINITY, element: null as HTMLElement | null }
+		).element;
 	}
 }
 

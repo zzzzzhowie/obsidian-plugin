@@ -2,6 +2,7 @@ export interface PinnedItem {
 	path: string;
 	type: "file" | "folder";
 	name: string;
+	order: number; // Order for sorting pinned items
 }
 
 export interface MyPluginSettings {
