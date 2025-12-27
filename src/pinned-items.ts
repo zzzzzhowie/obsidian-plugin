@@ -6,6 +6,7 @@ import {
 	TAbstractFile,
 } from "obsidian";
 import { PinnedItem, MyPluginSettings } from "./settings";
+import { getFolderNote, getFolderFromNote } from "./utils";
 import type MyPlugin from "./main";
 
 export class PinnedItemsManager {
@@ -92,21 +93,31 @@ export class PinnedItemsManager {
 	}
 
 	async pinItem(file: TAbstractFile) {
+		// If pinning a folder, check if it has a folder note
+		// If it does, pin the folder note file instead
+		let targetFile: TAbstractFile = file;
+		if (file instanceof TFolder) {
+			const folderNote = getFolderNote(file, this.app);
+			if (folderNote) {
+				targetFile = folderNote;
+			}
+		}
+
 		const item: PinnedItem = {
-			path: file.path,
-			type: file instanceof TFolder ? "folder" : "file",
-			name: file.name,
+			path: targetFile.path,
+			type: targetFile instanceof TFolder ? "folder" : "file",
+			name: targetFile.name,
 			order: this.getNextOrder(),
 		};
 
 		// Check if already pinned
 		if (
-			!this.plugin.settings.pinnedItems.some((p) => p.path === file.path)
+			!this.plugin.settings.pinnedItems.some((p) => p.path === targetFile.path)
 		) {
 			this.plugin.settings.pinnedItems.push(item);
 			await this.plugin.saveSettings();
 			this.refreshPinnedItems();
-			new Notice(`Pinned: ${file.name}`);
+			new Notice(`Pinned: ${targetFile.name}`);
 		}
 	}
 
@@ -317,14 +328,24 @@ export class PinnedItemsManager {
 
 				// Click handler to open the file/folder
 				// Handle both touch and click events for better mobile support
-				const openFile = (evt: Event) => {
+				const openFile = async (evt: Event) => {
 					evt.preventDefault();
 					const file = this.app.vault.getAbstractFileByPath(item.path);
 					if (file) {
 						if (file instanceof TFile) {
+							// Check if this is a folder note
+							const folder = getFolderFromNote(file, this.app);
+							if (folder) {
+								// If it's a folder note, expand and highlight the folder first
+								// Then open the file
+								this.plugin.folderNoteManager.expandFolder(folder);
+								setTimeout(() => {
+									this.plugin.folderNoteManager.highlightFolder(folder);
+								}, 100);
+							}
 							// Open the file in the active leaf or create a new one
 							const leaf = this.app.workspace.getLeaf(false);
-							leaf.openFile(file);
+							await leaf.openFile(file);
 						} else if (file instanceof TFolder) {
 							// For folders, just show a notice
 							new Notice(`Folder: ${file.path}`);

@@ -7,20 +7,23 @@ export function getFolderNote(folder: TFolder, app: App): TFile | null {
 	// Check for a file with the same name as the folder
 	const folderNotePath = `${folder.path}/${folder.name}.md`;
 	const file = app.vault.getAbstractFileByPath(folderNotePath);
-	
+
 	if (file instanceof TFile) {
 		return file;
 	}
-	
+
 	return null;
 }
 
 /**
  * Count the number of files in a folder (recursive)
  */
-export function countFilesInFolder(folder: TFolder, countSubfolders = true): number {
+export function countFilesInFolder(
+	folder: TFolder,
+	countSubfolders = true
+): number {
 	let count = 0;
-	
+
 	for (const child of folder.children) {
 		if (child instanceof TFile) {
 			count++;
@@ -28,7 +31,7 @@ export function countFilesInFolder(folder: TFolder, countSubfolders = true): num
 			count += countFilesInFolder(child, true);
 		}
 	}
-	
+
 	return count;
 }
 
@@ -36,14 +39,14 @@ export function countFilesInFolder(folder: TFolder, countSubfolders = true): num
  * Count only direct children files in a folder (non-recursive)
  */
 export function countDirectFiles(folder: TFolder): number {
-	return folder.children.filter(child => child instanceof TFile).length;
+	return folder.children.filter((child) => child instanceof TFile).length;
 }
 
 /**
  * Count only direct children folders
  */
 export function countDirectFolders(folder: TFolder): number {
-	return folder.children.filter(child => child instanceof TFolder).length;
+	return folder.children.filter((child) => child instanceof TFolder).length;
 }
 
 /**
@@ -51,6 +54,22 @@ export function countDirectFolders(folder: TFolder): number {
  */
 export function escapeCSSSelector(str: string): string {
 	// Escape special CSS selector characters
-	return str.replace(/[!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~]/g, '\\$&');
+	return str.replace(/[!"#$%&'()*+,./:;<=>?@[\\\]^`{|}~]/g, "\\$&");
 }
 
+/**
+ * Check if a file is a folder note and return the corresponding folder
+ */
+export function getFolderFromNote(file: TFile, app: App): TFolder | null {
+	// A folder note has the same name as its parent folder
+	const parent = file.parent;
+	if (!parent) return null;
+
+	// Check if the file name (without extension) matches the parent folder name
+	const fileNameWithoutExt = file.basename;
+	if (fileNameWithoutExt === parent.name && parent instanceof TFolder) {
+		return parent;
+	}
+
+	return null;
+}

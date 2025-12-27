@@ -1,5 +1,5 @@
 import { App, TFolder, TFile, Menu } from "obsidian";
-import { getFolderNote, escapeCSSSelector } from "./utils";
+import { getFolderNote, escapeCSSSelector, getFolderFromNote } from "./utils";
 import type MyPlugin from "./main";
 
 export class FolderNoteManager {
@@ -95,8 +95,32 @@ export class FolderNoteManager {
 		// Update when files are opened (clicking on files might refresh DOM)
 		this.plugin.registerEvent(
 			this.app.workspace.on("file-open", (file) => {
+				// Check if the opened file is a folder note
+				if (file instanceof TFile) {
+					const folder = getFolderFromNote(file, this.app);
+					if (folder) {
+						// Expand the folder in file explorer with delay to ensure DOM is ready
+						// Use try-catch to ensure errors don't prevent file opening
+						setTimeout(() => {
+							try {
+								this.expandFolder(folder);
+								// Highlight the folder instead of the file
+								this.highlightFolder(folder);
+							} catch (error) {
+								// Silently fail - don't interfere with file opening
+								console.error("Failed to expand/highlight folder:", error);
+							}
+						}, 200);
+					}
+				}
+				
 				setTimeout(() => {
-					this.updateAllFolderNotes();
+					try {
+						this.updateAllFolderNotes();
+					} catch (error) {
+						// Silently fail - don't interfere with file opening
+						console.error("Failed to update folder notes:", error);
+					}
 				}, 100);
 			})
 		);
@@ -355,6 +379,164 @@ export class FolderNoteManager {
 		);
 
 		return folderTitleElements.length > 0 ? (folderTitleElements[0] as HTMLElement) : null;
+	}
+
+	/**
+	 * Expand a folder in the file explorer and scroll to it
+	 */
+	expandFolder(folder: TFolder) {
+		// Use a simple recursive approach to expand all parent folders first
+		const expandParents = (currentFolder: TFolder) => {
+			const parent = currentFolder.parent;
+			if (parent && parent !== this.app.vault.getRoot()) {
+				expandParents(parent);
+			}
+			this.expandSingleFolder(currentFolder);
+		};
+
+		expandParents(folder);
+		
+		// Scroll to the folder after a short delay to ensure DOM is updated
+		setTimeout(() => {
+			this.scrollToFolder(folder);
+		}, 200);
+	}
+
+	/**
+	 * Expand a single folder in the file explorer
+	 */
+	private expandSingleFolder(folder: TFolder) {
+		try {
+			const folderTitleEl = this.getFolderElement(folder);
+			if (!folderTitleEl) {
+				return;
+			}
+
+			// Check if folder is already expanded
+			const treeItem = folderTitleEl.closest('.tree-item') as HTMLElement;
+			if (!treeItem) {
+				return;
+			}
+
+			// Check if the folder is collapsed
+			const isCollapsed = treeItem.classList.contains('is-collapsed');
+
+			if (isCollapsed) {
+				// Only use DOM manipulation - don't trigger click events that might interfere
+				treeItem.classList.remove('is-collapsed');
+				const children = treeItem.querySelector('.nav-folder-children') as HTMLElement;
+				if (children) {
+					children.style.display = '';
+				}
+			}
+		} catch (error) {
+			// Silently fail - don't interfere with file opening
+			console.error("Failed to expand single folder:", error);
+		}
+	}
+
+	/**
+	 * Scroll to a folder in the file explorer
+	 */
+	private scrollToFolder(folder: TFolder) {
+		const folderTitleEl = this.getFolderElement(folder);
+		if (!folderTitleEl) {
+			return;
+		}
+
+		// Scroll the folder into view
+		folderTitleEl.scrollIntoView({
+			behavior: 'smooth',
+			block: 'center',
+			inline: 'nearest'
+		});
+	}
+
+	/**
+	 * Highlight a folder in the file explorer instead of the file
+	 */
+	highlightFolder(folder: TFolder) {
+		try {
+			const fileExplorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+			if (!fileExplorerLeaves || fileExplorerLeaves.length === 0) {
+				return;
+			}
+
+			const fileExplorer = fileExplorerLeaves[0];
+			const fileExplorerView = fileExplorer.view as any;
+
+			// Wait a bit for Obsidian's default highlighting to complete, then override it
+			setTimeout(() => {
+				// Method 1: Try using file explorer view's internal methods
+				if (fileExplorerView) {
+					// Try revealFile method (might work for folders too)
+					if (typeof fileExplorerView.revealFile === 'function') {
+						try {
+							fileExplorerView.revealFile(folder);
+							// Give it a moment, then override the highlight
+							setTimeout(() => {
+								this.overrideHighlightToFolder(folder);
+							}, 50);
+							return;
+						} catch (e) {
+							// Fall through to DOM method
+						}
+					}
+				}
+
+				// Method 2: Use DOM manipulation to override highlight
+				this.overrideHighlightToFolder(folder);
+			}, 100);
+		} catch (error) {
+			console.error("Failed to highlight folder:", error);
+		}
+	}
+
+	/**
+	 * Override Obsidian's default file highlight to highlight folder instead
+	 */
+	private overrideHighlightToFolder(folder: TFolder) {
+		const fileExplorerLeaves = this.app.workspace.getLeavesOfType("file-explorer");
+		if (!fileExplorerLeaves || fileExplorerLeaves.length === 0) {
+			return;
+		}
+
+		const fileExplorer = fileExplorerLeaves[0];
+		const fileExplorerView = fileExplorer.view as any;
+		const fileExplorerViewContainer = fileExplorerView?.containerEl;
+		
+		if (!fileExplorerViewContainer) {
+			return;
+		}
+
+		// Remove active/selected class from all items (files and folders)
+		const activeItems = fileExplorerViewContainer.querySelectorAll(
+			'.nav-folder-title.is-active, .nav-file-title.is-active, .nav-folder-title.is-selected, .nav-file-title.is-selected'
+		);
+		activeItems.forEach((item: Element) => {
+			item.classList.remove('is-active', 'is-selected');
+		});
+
+		// Also remove from tree-item level
+		const activeTreeItems = fileExplorerViewContainer.querySelectorAll(
+			'.tree-item.is-active, .tree-item.is-selected'
+		);
+		activeTreeItems.forEach((item: Element) => {
+			item.classList.remove('is-active', 'is-selected');
+		});
+
+		// Add active class to the folder
+		const folderTitleEl = this.getFolderElement(folder);
+		if (folderTitleEl) {
+			folderTitleEl.classList.add('is-active');
+			const treeItem = folderTitleEl.closest('.tree-item') as HTMLElement;
+			if (treeItem) {
+				treeItem.classList.add('is-active');
+			}
+			
+			// Scroll to folder
+			this.scrollToFolder(folder);
+		}
 	}
 
 	addContextMenuItems(menu: Menu, folder: TFolder) {

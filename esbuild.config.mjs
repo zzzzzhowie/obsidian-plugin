@@ -39,7 +39,7 @@ const context = await esbuild.context({
 	logLevel: "info",
 	sourcemap: prod ? false : "inline",
 	treeShaking: true,
-	outfile: "dist/main.js",
+	outfile: "file-explorer-enhancements/main.js",
 	minify: prod,
 });
 
@@ -47,7 +47,7 @@ if (prod) {
 	await context.rebuild();
 	
 	// Copy manifest.json and styles.css to dist folder
-	const distDir = "dist";
+	const distDir = "file-explorer-enhancements";
 	if (!fs.existsSync(distDir)) {
 		fs.mkdirSync(distDir, { recursive: true });
 	}
